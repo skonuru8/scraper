@@ -1,0 +1,28 @@
+# Cookies — treat like passwords, never commit
+config/cookies/*.json
+
+# Scraper output — local only
+scraper/output/
+/output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+dist/
+*.js.map
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
