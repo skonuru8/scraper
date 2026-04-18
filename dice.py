@@ -12,6 +12,7 @@ Selector stability note:
     constants below and re-verify against a fresh HTML snapshot.
 """
 
+import re
 import sys
 from pathlib import Path
 from typing import Iterator
@@ -219,6 +220,8 @@ def _parse_cards(
         job["employment_type"] = emp_type
         if emp_type is None and emp_text:
             add_flag(job, FLAGS.EMPLOYMENT_TYPE_MISSING)
+        if re.search(r"third.?party", emp_text, re.IGNORECASE):
+            add_flag(job, FLAGS.THIRD_PARTY_CONTRACT)
 
         # Salary
         sal_el = card.select_one(SALARY_SEL)

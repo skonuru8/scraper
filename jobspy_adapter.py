@@ -21,7 +21,6 @@ from scraper.common.normalize import (
 from scraper.common.output import now_iso
 from scraper.common.schema import FLAGS, add_flag, make_empty_job
 
-# Default search terms — covers Sarath's target titles
 DEFAULT_SEARCHES = [
     "senior full stack developer",
     "senior java engineer",
@@ -238,8 +237,8 @@ def _normalize_interval(interval: str) -> str | None:
     mapping = {
         "yearly":  "annual",
         "annual":  "annual",
-        "monthly": "annual",   # treat monthly as annual (scorer will handle)
-        "weekly":  "annual",   # same
+        "monthly": "monthly",
+        "weekly":  None,       # weekly not supported; comp flagged as interval_missing
         "hourly":  "hourly",
         "hour":    "hourly",
     }

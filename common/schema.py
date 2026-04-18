@@ -33,6 +33,7 @@ class FLAGS:
     SOURCE_SCORE_SUSPECT   = "source_score_suspect"
     EDUCATION_UNPARSED     = "education_unparsed"
     STALE_POSTING          = "stale_posting"
+    THIRD_PARTY_CONTRACT   = "third_party_contract"
 
 
 def make_empty_job(
