@@ -59,14 +59,20 @@ def main() -> int:
         dest="hours_old",
         help="LinkedIn only: max age of postings in hours (default: 72).",
     )
+    parser.add_argument(
+        "--query",
+        type=str,
+        default="java developer",
+        help="Dice only: search query string (default: 'java developer').",
+    )
 
     args = parser.parse_args()
 
     # Resolve cookies path
     cookies_path: Path = args.cookies or (_COOKIES_DIR / f"{args.source}.json")
 
-    # LinkedIn doesn't need cookies, but the other two do
-    if args.source in ("dice", "jobright"):
+    # Only Jobright needs cookies now; Dice uses public search, LinkedIn uses JobSpy
+    if args.source == "jobright":
         if not cookies_path.exists():
             print(
                 f"Error: Cookie file not found at {cookies_path}\n"
@@ -116,7 +122,7 @@ def _get_adapter(args, cookies_path: Path, run_id: str):
         return scrape(
             max_jobs=args.max_jobs,
             run_id=run_id,
-            cookies_path=cookies_path,
+            query=args.query,
             headless=not args.headed,
         )
 
