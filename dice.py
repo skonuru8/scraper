@@ -1,9 +1,9 @@
 """
-dice.py — Dice.com recommended jobs scraper (paginated).
+dice.py — Dice.com job search scraper (paginated).
 
-Target URL: https://www.dice.com/recommended-jobs
+Target URL: https://www.dice.com/jobs?q={query}
 
-Selectors verified against live HTML snapshot (2026-04-17).
+No login required — public search page.
 Pagination is page-by-page (not infinite scroll).
 
 Selector stability note:
@@ -16,11 +16,11 @@ import re
 import sys
 from pathlib import Path
 from typing import Iterator
+from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-from scraper.common.cookies import load_cookies
 from scraper.common.normalize import (
     guess_seniority,
     parse_employment_type,
@@ -36,41 +36,42 @@ from datetime import datetime, timezone
 # ---------------------------------------------------------------------------
 # Selector constants
 # ---------------------------------------------------------------------------
-CARD_SEL         = "div[data-testid='job-card']"
-DETAIL_LINK_SEL  = "a[data-testid='job-search-job-detail-link']"
-COMPANY_SEL      = "p.mb-0.line-clamp-2"
+CARD_SEL          = "div[data-testid='job-card']"
+DETAIL_LINK_SEL   = "a[data-testid='job-search-job-detail-link']"
+COMPANY_SEL       = "p.mb-0.line-clamp-2"
 LOCATION_TAGS_SEL = "p.text-sm.font-normal.text-zinc-600"
-EMPLOYMENT_SEL   = "p[id='employmentType-label']"
-SALARY_SEL       = "p[id='salary-label']"
-NEXT_BTN_SEL     = "span[aria-label='Next']"
+EMPLOYMENT_SEL    = "p[id='employmentType-label']"
+SALARY_SEL        = "p[id='salary-label']"
+NEXT_BTN_SEL      = "span[aria-label='Next']"
 
-DICE_URL         = "https://www.dice.com/recommended-jobs"
-CARD_WAIT_MS     = 10000   # wait for cards to appear after page load / navigation
+DICE_SEARCH_URL   = "https://www.dice.com/jobs"
+CARD_WAIT_MS      = 10000   # wait for cards to appear after page load / navigation
 
 
 def scrape(
     max_jobs: int,
     run_id: str,
-    cookies_path: Path,
+    query: str = "full stack developer",
     headless: bool = True,
+    cookies_path: Path | None = None,  # unused, kept for API compat
 ) -> Iterator[dict]:
     """
-    Scrape Dice recommended jobs, paginating through results.
+    Scrape Dice job search results, paginating through results.
 
     Yields Job dicts (schema.py shape) one at a time as pages are parsed.
     Stops when max_jobs reached or no Next button available.
 
     Args:
-        max_jobs:     stop after this many unique jobs
-        run_id:       from output.make_run_id()
-        cookies_path: path to browser-exported Dice cookies JSON
-        headless:     False = show browser window (useful for debugging)
+        max_jobs:  stop after this many unique jobs
+        run_id:    from output.make_run_id()
+        query:     search query string (default: "full stack developer")
+        headless:  False = show browser window (useful for debugging)
+        cookies_path: ignored — search page needs no auth
 
     Raises:
-        FileNotFoundError: if cookies file missing
-        RuntimeError: if job cards never appear (selector broken or auth failed)
+        RuntimeError: if job cards never appear (selector broken or blocked)
     """
-    cookies = load_cookies(cookies_path)
+    search_url = f"{DICE_SEARCH_URL}?{urlencode({'q': query})}"
     scraped_at = now_iso()
     now = datetime.now(timezone.utc)
     seen_ids: set[str] = set()
@@ -79,25 +80,22 @@ def scrape(
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
         context = browser.new_context()
-        context.add_cookies(cookies)
-
         page = context.new_page()
-        page.goto(DICE_URL)
+        page.goto(search_url)
 
         try:
             page.wait_for_selector(CARD_SEL, timeout=CARD_WAIT_MS)
         except PlaywrightTimeoutError:
             raise RuntimeError(
-                f"No job cards found at {DICE_URL} after {CARD_WAIT_MS}ms. "
-                "Possible causes: auth failed (rotate cookies), selector changed, "
-                "or Dice blocked the request."
+                f"No job cards found at {search_url} after {CARD_WAIT_MS}ms. "
+                "Possible causes: selector changed, Dice blocked the request, "
+                "or query returned no results."
             )
 
         page_num = 1
-        _err(f"[dice] Loaded page {page_num}. Scraping up to {max_jobs} jobs...")
+        _err(f"[dice] query={query!r} page={page_num}. Scraping up to {max_jobs} jobs...")
 
         while True:
-            # Remember first card's data-id so we can detect page navigation
             first_card_id = _get_first_card_id(page.content())
 
             jobs_on_page = _parse_cards(page.content(), seen_ids, run_id, scraped_at, now)
@@ -122,13 +120,9 @@ def scrape(
                 _err("[dice] Next button disabled (last page). Done.")
                 break
 
-            # Navigate to next page
             next_btn.click()
             page_num += 1
 
-            # Wait for stale first card to detach and new cards to appear.
-            # Strategy: wait for the old first card's data-id to disappear,
-            # then wait for fresh cards to be present.
             try:
                 if first_card_id:
                     page.wait_for_selector(
@@ -147,6 +141,10 @@ def scrape(
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+def _err(msg: str) -> None:
+    print(msg, file=sys.stderr)
+
 
 def _get_first_card_id(html: str) -> str | None:
     """Return data-id of the first job card, used as stale-detection anchor."""
@@ -177,7 +175,6 @@ def _parse_cards(
             continue
         seen_ids.add(job_id)
 
-        # Detail URL + title from the same anchor
         detail_link = card.select_one(DETAIL_LINK_SEL)
         if not detail_link:
             continue  # malformed card, skip
@@ -190,15 +187,12 @@ def _parse_cards(
         job["title"] = title
         job["seniority"] = guess_seniority(title)
 
-        # Company: first p.mb-0.line-clamp-2 inside the logo span
         company_el = card.select_one(COMPANY_SEL)
         job["company"]["name"] = company_el.text.strip() if company_el else ""
 
-        # Location + Posted: two p.text-sm.font-normal.text-zinc-600 in location span
-        # First = location string, Second = posted string (after the bullet separator)
         location_tags = card.select(LOCATION_TAGS_SEL)
         location_text = location_tags[0].text.strip() if len(location_tags) > 0 else ""
-        posted_text   = location_tags[1].text.strip() if len(location_tags) > 1 else ""
+        posted_text   = location_tags[2].text.strip() if len(location_tags) > 2 else ""
 
         loc = parse_location(location_text)
         job["location"]["type"]      = loc["type"]
@@ -213,7 +207,6 @@ def _parse_cards(
         if posted_at is None:
             add_flag(job, FLAGS.POSTED_AT_MISSING)
 
-        # Employment type
         emp_el = card.select_one(EMPLOYMENT_SEL)
         emp_text = emp_el.text.strip() if emp_el else ""
         emp_type = parse_employment_type(emp_text)
@@ -223,20 +216,16 @@ def _parse_cards(
         if re.search(r"third.?party", emp_text, re.IGNORECASE):
             add_flag(job, FLAGS.THIRD_PARTY_CONTRACT)
 
-        # Salary
-        sal_el = card.select_one(SALARY_SEL)
-        sal_text = sal_el.text.strip() if sal_el else ""
-        comp = parse_salary(sal_text)
-        job["compensation"] = comp
-        if comp["min"] is None:
+        salary_el = card.select_one(SALARY_SEL)
+        salary_text = salary_el.text.strip() if salary_el else ""
+        salary = parse_salary(salary_text)
+        job["compensation"]["min"]      = salary.get("min")
+        job["compensation"]["max"]      = salary.get("max")
+        job["compensation"]["currency"] = salary.get("currency")
+        job["compensation"]["interval"] = salary.get("interval")
+        if not salary.get("min"):
             add_flag(job, FLAGS.SALARY_MISSING)
-        elif comp["currency"] is None:
-            add_flag(job, FLAGS.CURRENCY_UNSUPPORTED)
 
         new_jobs.append(job)
 
     return new_jobs
-
-
-def _err(msg: str) -> None:
-    print(msg, file=sys.stderr, flush=True)
