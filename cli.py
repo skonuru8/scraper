@@ -3,6 +3,7 @@ cli.py — scraper CLI entry point.
 
 Usage:
     python -m scraper --source dice --max 50
+    python -m scraper --source dice --max 50 --posted-within ONE
     python -m scraper --source jobright --max 50 --headed
     python -m scraper --source linkedin --max 90 --hours-old 24
 
@@ -10,6 +11,10 @@ Exit codes:
     0  success
     1  adapter error (scrape failed)
     2  cookie file missing
+
+v4.1 changes:
+    - Added --posted-within for Dice. Maps to filters.postedDate query param.
+      Values: ONE (24h), THREE (3d), SEVEN (7d). Other sources ignore it.
 """
 
 import argparse
@@ -20,6 +25,9 @@ from scraper.common.output import make_run_id, write_jsonl
 
 # Default cookies directory — relative to project root
 _COOKIES_DIR = Path("config/cookies")
+
+# Dice's postedDate filter values. Mirrors POSTED_WITHIN_VALUES in dice.py.
+_POSTED_WITHIN_CHOICES = ["ONE", "THREE", "SEVEN"]
 
 
 def main() -> int:
@@ -64,6 +72,19 @@ def main() -> int:
         type=str,
         default="java developer",
         help="Dice only: search query string (default: 'java developer').",
+    )
+    parser.add_argument(
+        "--posted-within",
+        type=str,
+        default=None,
+        choices=_POSTED_WITHIN_CHOICES,
+        dest="posted_within",
+        help=(
+            "Dice only: server-side recency filter. "
+            "ONE=last 24h, THREE=last 3 days, SEVEN=last 7 days. "
+            "Default (omitted): no filter, scrape all listings. "
+            "Use ONE for cron runs, SEVEN for backfill."
+        ),
     )
 
     args = parser.parse_args()
@@ -124,6 +145,7 @@ def _get_adapter(args, cookies_path: Path, run_id: str):
             run_id=run_id,
             query=args.query,
             headless=not args.headed,
+            posted_within=args.posted_within,
         )
 
     if args.source == "jobright":
@@ -145,3 +167,7 @@ def _get_adapter(args, cookies_path: Path, run_id: str):
         )
 
     raise ValueError(f"Unknown source: {args.source}")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

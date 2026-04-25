@@ -1,7 +1,7 @@
 """
 dice.py — Dice.com job search scraper (paginated).
 
-Target URL: https://www.dice.com/jobs?q={query}
+Target URL: https://www.dice.com/jobs?q={query}&filters.postedDate={posted_within}
 
 No login required — public search page.
 Pagination is page-by-page (not infinite scroll).
@@ -10,12 +10,18 @@ Selector stability note:
     Dice uses semantic data-testid and id attributes — more stable than
     Jobright's hashed class names. Still, if selectors break, update the
     constants below and re-verify against a fresh HTML snapshot.
+
+v4.1 changes:
+    - Added `posted_within` parameter mapping to Dice's `filters.postedDate`
+      query string. Values: "ONE" (24h), "THREE" (3d), "SEVEN" (7d).
+      None = no filter (all jobs). Lets cron runs target only fresh
+      listings instead of paging through 400+ stale results.
 """
 
 import re
 import sys
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
 from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup
@@ -47,6 +53,9 @@ NEXT_BTN_SEL      = "span[aria-label='Next']"
 DICE_SEARCH_URL   = "https://www.dice.com/jobs"
 CARD_WAIT_MS      = 10000   # wait for cards to appear after page load / navigation
 
+# Dice's postedDate filter values. These are the only ones the site supports.
+POSTED_WITHIN_VALUES = {"ONE", "THREE", "SEVEN"}
+
 
 def scrape(
     max_jobs: int,
@@ -54,6 +63,7 @@ def scrape(
     query: str = "full stack developer",
     headless: bool = True,
     cookies_path: Path | None = None,  # unused, kept for API compat
+    posted_within: Optional[str] = None,
 ) -> Iterator[dict]:
     """
     Scrape Dice job search results, paginating through results.
@@ -62,16 +72,34 @@ def scrape(
     Stops when max_jobs reached or no Next button available.
 
     Args:
-        max_jobs:  stop after this many unique jobs
-        run_id:    from output.make_run_id()
-        query:     search query string (default: "full stack developer")
-        headless:  False = show browser window (useful for debugging)
-        cookies_path: ignored — search page needs no auth
+        max_jobs:      stop after this many unique jobs
+        run_id:        from output.make_run_id()
+        query:         search query string (default: "full stack developer")
+        headless:      False = show browser window (useful for debugging)
+        cookies_path:  ignored — search page needs no auth
+        posted_within: Dice's postedDate filter — one of:
+                         "ONE"   = jobs posted in last 24h  (~80 jobs typical)
+                         "THREE" = jobs posted in last 3d   (~200 jobs typical)
+                         "SEVEN" = jobs posted in last 7d   (~400 jobs typical)
+                         None    = no recency filter (all listings)
 
     Raises:
-        RuntimeError: if job cards never appear (selector broken or blocked)
+        ValueError:   if posted_within is not None and not in POSTED_WITHIN_VALUES.
+        RuntimeError: if job cards never appear (selector broken or blocked).
     """
-    search_url = f"{DICE_SEARCH_URL}?{urlencode({'q': query})}"
+    if posted_within is not None and posted_within not in POSTED_WITHIN_VALUES:
+        raise ValueError(
+            f"Invalid posted_within={posted_within!r}. "
+            f"Must be one of {sorted(POSTED_WITHIN_VALUES)} or None."
+        )
+
+    # Build search URL with optional postedDate filter.
+    # Dice uses 'filters.postedDate' as the query param name.
+    params: dict[str, str] = {"q": query}
+    if posted_within:
+        params["filters.postedDate"] = posted_within
+    search_url = f"{DICE_SEARCH_URL}?{urlencode(params)}"
+
     scraped_at = now_iso()
     now = datetime.now(timezone.utc)
     seen_ids: set[str] = set()
@@ -93,7 +121,8 @@ def scrape(
             )
 
         page_num = 1
-        _err(f"[dice] query={query!r} page={page_num}. Scraping up to {max_jobs} jobs...")
+        filter_note = f" filter={posted_within}" if posted_within else ""
+        _err(f"[dice] query={query!r}{filter_note} page={page_num}. Scraping up to {max_jobs} jobs...")
 
         while True:
             first_card_id = _get_first_card_id(page.content())
