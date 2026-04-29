@@ -214,7 +214,7 @@ def _map_job(item: dict, run_id: str, scraped_at: str) -> dict:
 
     # Basic placeholders used before extraction.
     job = make_empty_job(
-        "jobright",
+        "jobright_api",
         str(source_url),
         str(job_id),
         run_id,
@@ -244,10 +244,35 @@ def _map_job(item: dict, run_id: str, scraped_at: str) -> dict:
     job["description_raw"] = _build_description(jr)
 
     # Save extra API metadata in meta for later calibration/debugging.
-    job["meta"]["jobright_display_score"] = jr.get("displayScore")
-    job["meta"]["jobright_rank_desc"] = jr.get("rankDesc")
-    job["meta"]["company_is_agency"] = cr.get("isAgency", False)
-    job["meta"]["company_size"] = cr.get("companySize")
+    industry_match = next(
+        (
+            s.get("score")
+            for s in (jr.get("recommendationScores") or [])
+            if isinstance(s, dict) and s.get("featureName") == "q_industry_match"
+        ),
+        None,
+    )
+
+    h1b_2025 = next(
+        (
+            h.get("count")
+            for h in (cr.get("h1bAnnualJobCount") or [])
+            if isinstance(h, dict) and str(h.get("year")) == "2025"
+        ),
+        0,
+    )
+
+    job["meta"]["jobright_display_score"]  = item.get("displayScore")
+    job["meta"]["jobright_rank_desc"]      = item.get("rankDesc")
+    job["meta"]["jobright_skill_match"]    = (
+        float(skill_match) if skill_match is not None else None
+    )
+    job["meta"]["jobright_industry_match"] = (
+        float(industry_match) if industry_match is not None else None
+    )
+    job["meta"]["company_is_agency"]       = cr.get("isAgency", False)
+    job["meta"]["company_size"]            = cr.get("companySize")
+    job["meta"]["company_h1b_count_2025"]  = int(h1b_2025) if h1b_2025 is not None else 0
 
     return job
 
@@ -288,7 +313,7 @@ def scrape(
         except Exception as e:
             _err(f"[jobright_api] Network/HTTP error at position={position}: {e}")
             break
-
+        
         if not data.get("success"):
             err_code = data.get("errorCode")
             err_msg = data.get("errorMsg", "")
