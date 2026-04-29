@@ -5,6 +5,7 @@ Usage:
     python -m scraper --source dice --max 50
     python -m scraper --source dice --max 50 --posted-within ONE
     python -m scraper --source jobright --max 50 --headed
+    python -m scraper --source jobright_api --max 50
     python -m scraper --source linkedin --max 90 --hours-old 24
 
 Exit codes:
@@ -38,7 +39,7 @@ def main() -> int:
     parser.add_argument(
         "--source",
         required=True,
-        choices=["dice", "jobright", "linkedin"],
+        choices=["dice", "jobright", "jobright_api", "linkedin"],
         help="Which source to scrape.",
     )
     parser.add_argument(
@@ -92,8 +93,8 @@ def main() -> int:
     # Resolve cookies path
     cookies_path: Path = args.cookies or (_COOKIES_DIR / f"{args.source}.json")
 
-    # Only Jobright needs cookies now; Dice uses public search, LinkedIn uses JobSpy
-    if args.source == "jobright":
+    # Only Jobright sources need cookies now; Dice uses public search, LinkedIn uses JobSpy
+    if args.source in ("jobright", "jobright_api"):
         if not cookies_path.exists():
             print(
                 f"Error: Cookie file not found at {cookies_path}\n"
@@ -155,6 +156,15 @@ def _get_adapter(args, cookies_path: Path, run_id: str):
             run_id=run_id,
             cookies_path=cookies_path,
             headless=not args.headed,
+        )
+
+    if args.source == "jobright_api":
+        from scraper.jobright_api import scrape
+        return scrape(
+            max_jobs=args.max_jobs,
+            run_id=run_id,
+            cookies_path=cookies_path,
+            sort_condition=1,
         )
 
     if args.source == "linkedin":
